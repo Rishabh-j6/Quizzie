@@ -202,7 +202,14 @@ const StudentDashboard = () => {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: i * 0.05 }}
                     className="bg-white rounded-xl border border-slate-200 p-5 hover:border-indigo-300 hover:shadow-sm transition cursor-pointer group"
-                    onClick={() => navigate(`/student/exam/${exam.id}`)}
+                    onClick={() => {
+                      const existingAttempt = recentAttempts.find(a => a.exam_id === exam.id && a.status === 'in_progress');
+                      if (existingAttempt) {
+                        navigate(`/student/exam/${exam.id}/take`, { state: { attemptId: existingAttempt.id } });
+                      } else {
+                        navigate(`/student/exam/${exam.id}/lobby`);
+                      }
+                    }}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
@@ -254,6 +261,10 @@ const StudentDashboard = () => {
                     onClick={() => {
                       if (attempt.status === 'evaluated') {
                         navigate(`/student/exam/${attempt.exam_id}/results`, {
+                          state: { attemptId: attempt.id }
+                        });
+                      } else if (attempt.status === 'in_progress' || attempt.status === 'started') {
+                        navigate(`/student/exam/${attempt.exam_id}/take`, {
                           state: { attemptId: attempt.id }
                         });
                       }
