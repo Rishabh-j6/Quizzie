@@ -34,6 +34,64 @@ const TakeExam = () => {
   const [loading, setLoading] = useState(true);
   const [exam, setExam] = useState<any>(null);
   const [proctoringSettings, setProctoringSettings] = useState<any>(null);
+  const [examError, setExamError] = useState<string | null>(null);
+  const [slideDirection, setSlideDirection] = useState<'forward' | 'backward'>('forward');
+
+  const handleNextQuestion = () => {
+    setSlideDirection('forward');
+    nextQuestion();
+  };
+
+  const handlePrevQuestion = () => {
+    setSlideDirection('backward');
+    prevQuestion();
+  };
+
+  /* --------------------------------
+     Enforce Browser Anti-Cheat Checks
+  -------------------------------- */
+  useEffect(() => {
+    // 1. Enter Fullscreen
+    const requestFullScreen = async () => {
+      try {
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen();
+        }
+      } catch (err) {
+        // Suppress warning if not allowed
+      }
+    };
+    
+    const handleNavigationClick = () => {
+      requestFullScreen();
+    };
+    document.addEventListener('click', handleNavigationClick);
+
+    // 2. Prevent Copy / Paste
+    const preventCopyPaste = (e: ClipboardEvent) => {
+      e.preventDefault();
+      alert('Copying and pasting is strictly prohibited during the exam.');
+    };
+
+    // 3. Prevent Context Menu (Right Click)
+    const preventContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
+    document.addEventListener('copy', preventCopyPaste);
+    document.addEventListener('paste', preventCopyPaste);
+    document.addEventListener('contextmenu', preventContextMenu);
+
+    return () => {
+      document.removeEventListener('click', handleNavigationClick);
+      document.removeEventListener('copy', preventCopyPaste);
+      document.removeEventListener('paste', preventCopyPaste);
+      document.removeEventListener('contextmenu', preventContextMenu);
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+    };
+  }, []);
 
   /* --------------------------------
      Fetch Exam + Questions
@@ -86,8 +144,8 @@ const TakeExam = () => {
       const questionsRes = await api.get(`/exams/${examId}/questions`);
 
       if (!questionsRes.data?.length) {
-        alert('No questions available');
-        navigate('/student');
+        setExamError('No questions available in this exam.');
+        setLoading(false);
         return;
       }
 
@@ -126,11 +184,16 @@ const TakeExam = () => {
     try {
       const responses = Array.from(
         useExamStore.getState().answers.values()
-      ).map(a => ({
-        question_id: a.questionId,
-        selected_option_ids: a.selectedOptions,
-        marked_for_review: a.markedForReview,
-      }));
+      ).map(a => {
+        const question = questions.find(q => q.id === a.questionId);
+        const mappedOptionIds = a.selectedOptions.map(idx => question?.options[idx]?.id).filter(Boolean);
+            
+        return {
+          question_id: a.questionId,
+          selected_option_ids: mappedOptionIds as string[],
+          marked_for_review: a.markedForReview,
+        };
+      });
 
       await api.post(`/attempts/${attemptId}/submit`, { responses });
 
@@ -156,6 +219,22 @@ const TakeExam = () => {
     console.log('Violation detected:', violation);
     // Optional: toast / modal
   };
+
+  if (examError) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center">
+        <AlertTriangle className="w-16 h-16 text-amber-500 mb-4" />
+        <h2 className="text-2xl font-bold mb-2">Exam Error</h2>
+        <p className="text-slate-400 mb-8">{examError}</p>
+        <button
+          onClick={() => navigate('/student')}
+          className="px-6 py-3 bg-indigo-600 rounded-lg font-semibold hover:bg-indigo-700 transition"
+        >
+          Return to Dashboard
+        </button>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -220,12 +299,12 @@ const TakeExam = () => {
 
       {/* Content */}
       <div className="max-w-7xl mx-auto px-6 py-8 flex gap-8">
-        <div className="flex-1">
-          <QuestionCard question={currentQuestion} />
-
-          <div className="flex justify-between mt-8">
+        <div className="flex-1 max-w-4xl max-h-full overflow-y-auto px-8 py-6 custom-scrollbar relative">
+          <QuestionCard direction={slideDirection} />
+          
+          <div className="mt-6 flex items-center justify-between">
             <button
-              onClick={prevQuestion}
+              onClick={handlePrevQuestion}
               disabled={currentQuestionIndex === 0}
               className="px-6 py-2 bg-slate-700 rounded-lg disabled:opacity-50"
             >
@@ -241,7 +320,7 @@ const TakeExam = () => {
               </button>
             ) : (
               <button
-                onClick={nextQuestion}
+                onClick={handleNextQuestion}
                 className="px-6 py-2 bg-indigo-600 rounded-lg"
               >
                 Next
@@ -266,6 +345,7 @@ const TakeExam = () => {
 
       {showSubmitModal && (
         <SubmitModal
+          isOpen={true}
           onClose={() => setShowSubmitModal(false)}
           onConfirm={confirmSubmit}
         />
