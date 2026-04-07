@@ -86,12 +86,19 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
 
   // Initialize camera & microphone
   useEffect(() => {
+    let isMounted = true;
+    
     if (!isActive || (!settings.camera_enabled && !settings.microphone_enabled)) {
       stopCamera();
       return;
     }
-    startCamera();
-    return () => stopCamera();
+    
+    startCamera(isMounted);
+    
+    return () => {
+      isMounted = false;
+      stopCamera();
+    };
   }, [isActive, settings.camera_enabled, settings.microphone_enabled]);
 
   // Start detection loop
@@ -119,7 +126,7 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
     };
   }, [cameraReady, isActive, settings.face_detection_enabled, settings.detection_interval]);
 
-  const startCamera = async () => {
+  const startCamera = async (isMounted = true) => {
     try {
       setCameraError(null);
 
@@ -127,6 +134,12 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
         video: settings.camera_enabled ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } : false,
         audio: settings.microphone_enabled
       });
+
+      // Crucial strict unmount check: If component dropped during await, kill tracks and exit instantly
+      if (!isMounted) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
 
       if (videoRef.current && settings.camera_enabled) {
         videoRef.current.srcObject = stream;
@@ -153,6 +166,8 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
               formData.append('attempt_id', attemptId);
               formData.append('file', e.data, 'audio.webm');
               
+              // Bypass audio processing per user request for debugging
+              /*
               const res = await api.post('/monitor/audio', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
               });
@@ -160,6 +175,7 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
               if (res.data.flags && res.data.flags.length > 0) {
                 res.data.flags.forEach((flag: string) => reportViolation(flag));
               }
+              */
             } catch (err) {
               console.error('Audio upload error:', err);
             } finally {
@@ -219,6 +235,8 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
           formData.append('attempt_id', attemptId);
           formData.append('file', blob, 'frame.jpg');
 
+          // Bypass frame processing per user request for debugging
+          /*
           const response = await api.post('/monitor/frame', formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
           });
@@ -230,6 +248,7 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
           if (result.flags && result.flags.length > 0) {
             result.flags.forEach(flag => reportViolation(flag));
           }
+          */
         } catch (err) {
           console.error('Frame upload error:', err);
         } finally {
@@ -373,61 +392,58 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
         </motion.div>
       )}
 
-      {/* FIX Bug 11: Single video element, always rendered, hidden/shown via CSS */}
-      <div className={showPreview && cameraReady ? '' : 'hidden'}>
+      {/* FIX: Single persistent video element wrapped within styling to prevent unmounting and breaking refs */}
+      <div className={showPreview && cameraReady ? 'bg-white rounded-lg border border-slate-200 overflow-hidden relative' : 'hidden'}>
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-auto max-h-96 object-cover bg-slate-900"
+        />
         <AnimatePresence>
-          {showPreview && cameraReady && (
+          {showPreview && cameraReady && lastDetection && (
             <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="bg-white rounded-lg border border-slate-200 overflow-hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute top-3 left-3 right-3 flex flex-wrap gap-2 pointer-events-none"
             >
-              <div className="relative">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-auto max-h-96 object-cover bg-slate-900"
-                />
-                {lastDetection && (
-                  <div className="absolute top-3 left-3 right-3 flex flex-wrap gap-2">
-                    {lastDetection.face_present && (
-                      <div className="inline-flex items-center gap-2 bg-emerald-500 text-white px-3 py-1 rounded-full text-sm font-medium">
-                        <CheckCircle className="w-4 h-4" /> Face Detected
-                      </div>
-                    )}
-                    {lastDetection.multiple_faces && (
-                      <div className="inline-flex items-center gap-2 bg-rose-500 text-white px-3 py-1 rounded-full text-sm font-medium">
-                        <AlertTriangle className="w-4 h-4" /> Multiple Faces
-                      </div>
-                    )}
-                    {!lastDetection.looking_at_screen && lastDetection.face_present && (
-                      <div className="inline-flex items-center gap-2 bg-amber-500 text-white px-3 py-1 rounded-full text-sm font-medium">
-                        <AlertTriangle className="w-4 h-4" /> Looking Away
-                      </div>
-                    )}
-                  </div>
-                )}
-                {isDetecting && (
-                  <div className="absolute bottom-3 right-3">
-                    <div className="bg-indigo-500 text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-2">
-                      <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
-                      Analyzing...
-                    </div>
-                  </div>
-                )}
+              {lastDetection.face_present && (
+                <div className="inline-flex items-center gap-2 bg-emerald-500 text-white px-3 py-1 rounded-full text-sm font-medium">
+                  <CheckCircle className="w-4 h-4" /> Face Detected
+                </div>
+              )}
+              {lastDetection.multiple_faces && (
+                <div className="inline-flex items-center gap-2 bg-rose-500 text-white px-3 py-1 rounded-full text-sm font-medium">
+                  <AlertTriangle className="w-4 h-4" /> Multiple Faces
+                </div>
+              )}
+              {!lastDetection.looking_at_screen && lastDetection.face_present && (
+                <div className="inline-flex items-center gap-2 bg-amber-500 text-white px-3 py-1 rounded-full text-sm font-medium">
+                  <AlertTriangle className="w-4 h-4" /> Looking Away
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showPreview && cameraReady && isDetecting && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              className="absolute bottom-3 right-3"
+            >
+              <div className="bg-indigo-500 text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-2">
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                Analyzing...
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
-
-      {/* FIX Bug 11: Video always rendered (for stream), but hidden when preview off */}
-      {!showPreview && (
-        <video ref={videoRef} autoPlay playsInline muted className="hidden" />
-      )}
 
       {/* Hidden canvas for frame capture */}
       <canvas ref={canvasRef} className="hidden" />
