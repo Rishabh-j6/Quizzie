@@ -50,14 +50,14 @@ const ToastContainer = () => {
   };
 
   return (
-    <div className="fixed top-4 right-4 z-[100] space-y-2">
+    <div className="fixed bottom-24 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
       <AnimatePresence>
         {toasts.map((toast) => (
           <motion.div
             key={toast.id}
-            initial={{ opacity: 0, x: 100 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 100 }}
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 20 }}
             className={`flex items-center gap-3 p-4 rounded-lg border shadow-lg ${styles[toast.type]} min-w-[300px]`}
           >
             {icons[toast.type]}
