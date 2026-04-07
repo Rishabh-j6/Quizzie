@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Palette, AlertTriangle } from 'lucide-react';
+import { useToastStore } from '@/shared/components/feedback/Toast';
 
 import { useExamStore } from '../store/examStore';
 import QuestionCard from '../components/QuestionCard';
@@ -27,7 +28,10 @@ const TakeExam = () => {
     nextQuestion,
     prevQuestion,
     submitExam,
+    answers,
   } = useExamStore();
+  
+  const { addToast } = useToastStore();
 
   const [showPalette, setShowPalette] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
@@ -36,6 +40,15 @@ const TakeExam = () => {
   const [proctoringSettings, setProctoringSettings] = useState<any>(null);
   const [examError, setExamError] = useState<string | null>(null);
   const [slideDirection, setSlideDirection] = useState<'forward' | 'backward'>('forward');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isHealthZero, setIsHealthZero] = useState(false);
+  const [isFullscreenStart, setIsFullscreenStart] = useState(false);
+  const hasSubmittedRef = useRef(false);
+  const answersRef = useRef(answers);
+
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
 
   const handleNextQuestion = () => {
     setSlideDirection('forward');
@@ -51,39 +64,37 @@ const TakeExam = () => {
      Enforce Browser Anti-Cheat Checks
   -------------------------------- */
   useEffect(() => {
-    // 1. Enter Fullscreen
-    const requestFullScreen = async () => {
-      try {
-        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
-          await document.documentElement.requestFullscreen();
-        }
-      } catch (err) {
-        // Suppress warning if not allowed
+    const handleFullscreenChange = () => {
+      // If student drops out of fullscreen while the exam is active
+      if (!document.fullscreenElement && isFullscreenStart && !hasSubmittedRef.current) {
+        api.post('/monitor/enhanced/violation', {
+          attempt_id: attemptId,
+          event_type: 'proctoring_flag',
+          flags: [{
+            type: 'fullscreen_exit',
+            severity: 'high',
+            message: 'Student exited full-screen mode',
+            metadata: { timestamp: new Date().toISOString() }
+          }]
+        }).catch(() => {});
+        addToast('VIOLATION: You have exited full-screen mode! This has been reported to the examiner.', 'error');
       }
     };
-    
-    const handleNavigationClick = () => {
-      requestFullScreen();
-    };
-    document.addEventListener('click', handleNavigationClick);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
 
-    // 2. Prevent Copy / Paste
+    // Prevent Copy / Paste
     const preventCopyPaste = (e: ClipboardEvent) => {
       e.preventDefault();
-      alert('Copying and pasting is strictly prohibited during the exam.');
+      addToast('Copying and pasting is strictly prohibited during the exam.', 'warning');
     };
-
-    // 3. Prevent Context Menu (Right Click)
-    const preventContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-    };
+    const preventContextMenu = (e: MouseEvent) => e.preventDefault();
 
     document.addEventListener('copy', preventCopyPaste);
     document.addEventListener('paste', preventCopyPaste);
     document.addEventListener('contextmenu', preventContextMenu);
 
     return () => {
-      document.removeEventListener('click', handleNavigationClick);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('copy', preventCopyPaste);
       document.removeEventListener('paste', preventCopyPaste);
       document.removeEventListener('contextmenu', preventContextMenu);
@@ -91,7 +102,42 @@ const TakeExam = () => {
         document.exitFullscreen().catch(() => {});
       }
     };
-  }, []);
+  }, [isFullscreenStart, attemptId]);
+
+  /* --------------------------------
+     Auto-Submit Handlers
+  -------------------------------- */
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!hasSubmittedRef.current && attemptId && exam) {
+        // Build payload
+        const responses = Array.from(answersRef.current.values()).map((a: any) => {
+          const q = exam.questions.find((q: any) => q.id === a.questionId);
+          let mappedOptionIds: string[] = [];
+          if (q) {
+            mappedOptionIds = a.selectedOptionIndices.map((idx: number) => q.options[idx].id);
+          }
+          return {
+            question_id: a.questionId,
+            selected_option_ids: mappedOptionIds,
+            marked_for_review: a.markedForReview,
+          };
+        });
+        
+        const payload = JSON.stringify({ responses });
+        // Send a beacon that doesn't block unmount
+        navigator.sendBeacon(
+          `http://localhost:8000/api/v1/attempts/${attemptId}/submit`,
+          new Blob([payload], { type: 'application/json' })
+        );
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [attemptId, exam]);
 
   /* --------------------------------
      Fetch Exam + Questions
@@ -181,6 +227,12 @@ const TakeExam = () => {
   };
 
   const confirmSubmit = async () => {
+    if (hasSubmittedRef.current) return;
+    hasSubmittedRef.current = true;
+    setIsSubmitting(true);
+    
+    setShowSubmitModal(false);
+
     try {
       const responses = Array.from(
         useExamStore.getState().answers.values()
@@ -203,7 +255,10 @@ const TakeExam = () => {
       });
     } catch (error) {
       console.error('Submit failed:', error);
-      alert('Failed to submit exam.');
+      addToast('Failed to submit exam.', 'error');
+      hasSubmittedRef.current = false;
+      setIsSubmitting(false);
+      setIsHealthZero(false);
     }
   };
 
@@ -211,7 +266,8 @@ const TakeExam = () => {
      Proctoring Handlers
   -------------------------------- */
   const handleHealthZero = () => {
-    alert('Your exam health reached zero. Auto-submitting.');
+    setIsHealthZero(true);
+    addToast('Your exam health reached zero. Auto-submitting.', 'error');
     confirmSubmit();
   };
 
@@ -239,9 +295,59 @@ const TakeExam = () => {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-        <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+        <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
+  }
+
+  if (isHealthZero || isSubmitting) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center fixed inset-0 z-[9999]">
+        <AlertTriangle className="w-16 h-16 text-rose-500 mb-4 animate-pulse" />
+        <h2 className="text-3xl font-bold mb-4 text-white">
+          {isHealthZero ? 'Exam Terminated' : 'Submitting Exam...'}
+        </h2>
+        <p className="text-slate-300 mb-8 max-w-lg">
+          {isHealthZero 
+            ? 'Your exam health has depleted entirely due to repeated violations. The system is securely saving and auto-submitting your progress.'
+            : 'Please wait while your responses are securely saved. Your camera is now off.'}
+        </p>
+        <div className="w-12 h-12 border-4 border-rose-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isFullscreenStart) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center">
+        <AlertTriangle className="w-16 h-16 text-indigo-500 mb-4" />
+        <h2 className="text-3xl font-bold mb-4">Exam Mode Strict Enforcement</h2>
+        <p className="text-slate-300 mb-8 max-w-lg">
+          To maintain exam integrity, this assessment requires a full-screen environment. 
+          Leaving the full-screen mode, switching tabs, or attempting to open other applications 
+          will result in a high-severity penalty.
+        </p>
+        <button
+          onClick={async () => {
+            try {
+              if (document.documentElement.requestFullscreen) {
+                await document.documentElement.requestFullscreen();
+              }
+              setIsFullscreenStart(true);
+            } catch (err) {
+              addToast('Could not enter fullscreen. Please ensure your browser allows fullscreen.', 'error');
+            }
+          }}
+          className="px-8 py-4 bg-indigo-600 rounded-lg font-bold text-lg hover:bg-indigo-700 transition shadow-lg shadow-indigo-600/20"
+        >
+          Enter Fullscreen & Begin Exam
+        </button>
+      </div>
+    );
+  }
+
+  if (!exam || questions.length === 0) {
+    return null;
   }
 
   const currentQuestion = questions[currentQuestionIndex];
