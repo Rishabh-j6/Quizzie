@@ -165,9 +165,7 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
               const formData = new FormData();
               formData.append('attempt_id', attemptId);
               formData.append('file', e.data, 'audio.webm');
-              
-              // Bypass audio processing per user request for debugging
-              /*
+
               const res = await api.post('/monitor/audio', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
               });
@@ -175,7 +173,6 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
               if (res.data.flags && res.data.flags.length > 0) {
                 res.data.flags.forEach((flag: string) => reportViolation(flag));
               }
-              */
             } catch (err) {
               console.error('Audio upload error:', err);
             } finally {
@@ -230,13 +227,10 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
         if (!blob) return;
 
         try {
-          // FIX Bug 3: Use correct endpoint /monitor/frame with FormData
           const formData = new FormData();
           formData.append('attempt_id', attemptId);
           formData.append('file', blob, 'frame.jpg');
 
-          // Bypass frame processing per user request for debugging
-          /*
           const response = await api.post('/monitor/frame', formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
           });
@@ -248,7 +242,6 @@ const CameraProctoring: React.FC<CameraProctoringProps> = ({
           if (result.flags && result.flags.length > 0) {
             result.flags.forEach(flag => reportViolation(flag));
           }
-          */
         } catch (err) {
           console.error('Frame upload error:', err);
         } finally {
