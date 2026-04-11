@@ -533,3 +533,170 @@ async def recover_health(
         "recovered": recovered,
         "health": health_status
     }
+
+
+# ── Suspicion Score ───────────────────────────────────────────────────
+
+@router.get("/attempt/{attempt_id}/suspicion-score")
+async def get_suspicion_score(
+    attempt_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Compute a 0-100 suspicion score for an attempt.
+    Factors: violation frequency, severity weighting, timing clustering.
+    """
+    attempt = db.query(ExamAttempt).filter(ExamAttempt.id == attempt_id).first()
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+
+    exam = db.query(Exam).filter(Exam.id == attempt.exam_id).first()
+    if current_user.role == 'student' and str(attempt.student_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if current_user.role == 'examiner' and str(exam.created_by) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    violations = db.query(CheatLog).filter(CheatLog.attempt_id == attempt_id).all()
+
+    if not violations:
+        return {"score": 0, "label": "Clean", "breakdown": {}}
+
+    # Severity weights
+    SEV = {"low": 1, "medium": 3, "high": 8}
+    # Flag type base weights (some flags are more suspicious than others)
+    FLAG_W = {
+        "multiple_faces_detected": 15,
+        "tab_switch": 12,
+        "fullscreen_exit": 10,
+        "no_face_detected": 8,
+        "gaze_off_screen": 5,
+        "looking_away": 4,
+        "mouth_movement_detected": 4,
+        "loud_noise_detected": 3,
+        "copy_paste_attempt": 6,
+        "multi_monitor_detected": 5,
+    }
+
+    # 1. Weighted frequency score (0–60)
+    raw_weight = sum(
+        FLAG_W.get(v.flag_type, 2) * SEV.get(str(v.severity).split('.')[-1], 1)
+        for v in violations
+    )
+    freq_score = min(60, raw_weight * 0.8)
+
+    # 2. Clustering score — violations close together are more suspicious (0–25)
+    if len(violations) >= 2:
+        sorted_v = sorted(violations, key=lambda v: v.timestamp)
+        gaps = [
+            (sorted_v[i+1].timestamp - sorted_v[i].timestamp).total_seconds()
+            for i in range(len(sorted_v) - 1)
+        ]
+        # Tight clusters (< 30 s apart) are suspicious
+        tight = sum(1 for g in gaps if g < 30)
+        cluster_score = min(25, tight * 5)
+    else:
+        cluster_score = 0
+
+    # 3. High-severity ratio bonus (0–15)
+    high_count = sum(1 for v in violations if str(v.severity).endswith('HIGH') or str(v.severity) == 'CheatSeverity.HIGH')
+    ratio = high_count / len(violations)
+    severity_score = min(15, ratio * 20)
+
+    total = min(100, int(freq_score + cluster_score + severity_score))
+
+    # Label
+    if total < 15:
+        label = "Clean"
+    elif total < 35:
+        label = "Low suspicion"
+    elif total < 60:
+        label = "Moderate suspicion"
+    elif total < 80:
+        label = "High suspicion"
+    else:
+        label = "Very high suspicion"
+
+    return {
+        "score": total,
+        "label": label,
+        "total_violations": len(violations),
+        "breakdown": {
+            "frequency_score": round(freq_score, 1),
+            "clustering_score": round(cluster_score, 1),
+            "severity_score": round(severity_score, 1),
+        }
+    }
+
+
+# ── Live Proctoring Feed (examiner view) ───────────────────────────────
+
+@router.get("/exam/{exam_id}/live-feed")
+async def get_live_feed(
+    exam_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns real-time summary of all active attempts for an exam.
+    Shows student name, health %, violation count, last flag.
+    """
+    if current_user.role not in ['examiner', 'admin']:
+        raise HTTPException(status_code=403, detail="Examiners only")
+
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    if current_user.role == 'examiner' and str(exam.created_by) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from app.models.user import User as UserModel
+    active_attempts = db.query(ExamAttempt).filter(
+        ExamAttempt.exam_id == exam_id,
+        ExamAttempt.submitted_at == None  # noqa: E711 — still in progress
+    ).all()
+
+    ps = db.query(ProctoringSettingsModel).filter(
+        ProctoringSettingsModel.exam_id == exam_id
+    ).first()
+    initial_health = ps.initial_health if ps else 100
+
+    feed = []
+    for attempt in active_attempts:
+        student = db.query(UserModel).filter(UserModel.id == attempt.student_id).first()
+        violations = db.query(CheatLog).filter(CheatLog.attempt_id == attempt.id).all()
+
+        calc = HealthCalculator(initial_health=initial_health)
+        for v in violations:
+            calc.apply_violation(v.flag_type, str(v.severity).split('.')[-1].lower())
+
+        last_flag = None
+        if violations:
+            latest = max(violations, key=lambda v: v.timestamp)
+            last_flag = {
+                "type": latest.flag_type,
+                "severity": str(latest.severity).split('.')[-1].lower(),
+                "timestamp": latest.timestamp.isoformat()
+            }
+
+        health = calc.get_health_status()
+        feed.append({
+            "attempt_id": str(attempt.id),
+            "student_name": student.full_name if student else "Unknown",
+            "student_email": student.email if student else "",
+            "health_percentage": health["percentage"],
+            "health_status": health["status"],
+            "violation_count": len(violations),
+            "last_flag": last_flag,
+            "started_at": attempt.started_at.isoformat() if attempt.started_at else None,
+        })
+
+    # Sort: most flagged first
+    feed.sort(key=lambda x: x["violation_count"], reverse=True)
+
+    return {
+        "exam_id": str(exam_id),
+        "active_count": len(feed),
+        "flagged_count": sum(1 for s in feed if s["violation_count"] > 0),
+        "students": feed
+    }
