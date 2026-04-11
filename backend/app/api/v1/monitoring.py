@@ -48,7 +48,14 @@ async def analyze_frame(
     if result['flags']:
         from app.models.cheat_log import CheatSeverity
         for flag in result['flags']:
-            raw_severity = result.get('severity', 'low')
+            # flags are now dicts: {type, severity, message}
+            if isinstance(flag, dict):
+                flag_type = flag.get('type', 'unknown')
+                raw_severity = flag.get('severity', 'low')
+            else:
+                flag_type = str(flag)
+                raw_severity = result.get('severity', 'low')
+
             try:
                 valid_severity = CheatSeverity(raw_severity)
             except ValueError:
@@ -56,9 +63,12 @@ async def analyze_frame(
 
             log = CheatLog(
                 attempt_id=attempt_id,
-                flag_type=flag,
+                flag_type=flag_type,
                 severity=valid_severity,
-                meta_data={'num_faces': result.get('num_faces', 0)}
+                meta_data={
+                    'num_faces': result.get('num_faces', 0),
+                    'message': flag.get('message', '') if isinstance(flag, dict) else ''
+                }
             )
             db.add(log)
         
