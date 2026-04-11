@@ -480,3 +480,56 @@ class HealthCalculator:
             'status': s,
             'violations_count': len(self.violation_history)
         }
+
+
+# ── Health Recovery Endpoint ───────────────────────────────────────────────────
+
+class RecoverRequest(BaseModel):
+    attempt_id: UUID
+    amount: int = Field(3, ge=1, le=20)
+
+
+@router.post("/recover")
+async def recover_health(
+    req: RecoverRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Restore a small amount of health for clean behaviour.
+    Called by the frontend after 60 s with no violations.
+    Only recovers up to the initial max — cannot overheal.
+    """
+    attempt = db.query(ExamAttempt).filter(
+        ExamAttempt.id == req.attempt_id,
+        ExamAttempt.student_id == current_user.id
+    ).first()
+
+    if not attempt:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attempt not found")
+
+    ps = db.query(ProctoringSettingsModel).filter(
+        ProctoringSettingsModel.exam_id == attempt.exam_id
+    ).first()
+    initial_health = ps.initial_health if ps else 100
+
+    # Rebuild current health from violation log
+    violations = db.query(CheatLog).filter(CheatLog.attempt_id == req.attempt_id).all()
+    calc = HealthCalculator(initial_health=initial_health)
+    for v in violations:
+        calc.apply_violation(v.flag_type, str(v.severity).replace('CheatSeverity.', ''))
+
+    # Apply recovery (capped at initial max)
+    new_health = min(initial_health, calc.current_health + req.amount)
+    recovered  = new_health - calc.current_health
+    calc.current_health = new_health
+
+    health_status = calc.get_health_status()
+
+    # Push updated health to WebSocket if connected
+    await manager.send_health_update(str(req.attempt_id), health_status)
+
+    return {
+        "recovered": recovered,
+        "health": health_status
+    }
