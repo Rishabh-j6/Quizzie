@@ -46,9 +46,12 @@ def list_exams(
     """List all exams (filtered by role)"""
     query = db.query(Exam)
 
-    if current_user.role == "examiner":
+    # Normalise role to string value in case SQLAlchemy returns enum member
+    role = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+
+    if role == "examiner":
         query = query.filter(Exam.created_by == current_user.id)
-    elif current_user.role == "student":
+    elif role == "student":
         query = query.filter(Exam.status == "live")
         return query.order_by(Exam.created_at.desc()).all()
 
@@ -151,7 +154,8 @@ def update_exam_status(
         if questions:
             exam.total_marks = sum(q.marks for q in questions)
 
-    exam.status = new_status
+    # Use the ExamStatus enum member to avoid type mismatch with SQLAlchemy Enum column
+    exam.status = ExamStatus(new_status)
     db.commit()
     db.refresh(exam)
     return exam

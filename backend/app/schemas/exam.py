@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -31,6 +31,12 @@ class Exam(ExamBase):
     created_by: UUID
     created_at: datetime
     updated_at: datetime
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalise_status(cls, v):
+        # SQLAlchemy Enum returns the member; extract .value if needed
+        return v.value if hasattr(v, 'value') else str(v)
 
     class Config:
         from_attributes = True
