@@ -1,43 +1,39 @@
 import axios from "axios";
+import { useAuthStore } from "@/features/auth/store/authStore";
 
-const baseURL =
-  (import.meta as any).env?.VITE_API_URL || "http://localhost:8000/api/v1";
+// Relative path → goes through Vite proxy in dev, nginx proxy in prod. No CORS.
+const baseURL = "/api/v1";
 
 const api = axios.create({
   baseURL,
-  headers: {
-    "Content-Type": "application/json",
-  },
+  headers: { "Content-Type": "application/json" },
 });
 
-// Request interceptor → attach auth token
+// ── Request interceptor: attach JWT from Zustand store (no localStorage parsing) ──
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem("auth-storage");
-
+    // useAuthStore.getState() is the correct way to access Zustand outside React
+    const token = useAuthStore.getState().token;
     if (token) {
-      try {
-        const authData = JSON.parse(token);
-        if (authData?.state?.token) {
-          config.headers.Authorization = `Bearer ${authData.state.token}`;
-        }
-      } catch (error) {
-        console.error("Failed to parse auth token:", error);
-      }
+      config.headers.Authorization = `Bearer ${token}`;
     }
-
     return config;
   },
   (error) => Promise.reject(error)
 );
 
-// Response interceptor → handle 401
+// ── Response interceptor: on 401 log out cleanly via the store ──
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem("auth-storage");
-      window.location.href = "/login";
+      // Call the store's logout action — updates state AND clears localStorage
+      useAuthStore.getState().logout();
+      // Only redirect if we're not already on a public page
+      const publicPaths = ["/login", "/register", "/verify-email", "/forgot-password", "/reset-password"];
+      if (!publicPaths.some((p) => window.location.pathname.startsWith(p))) {
+        window.location.href = "/login";
+      }
     }
     return Promise.reject(error);
   }

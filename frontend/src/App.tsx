@@ -6,6 +6,9 @@ import { Suspense, lazy } from 'react';
 // Lazy load pages
 const LoginPage = lazy(() => import('./features/auth/pages/LoginPage'));
 const RegisterPage = lazy(() => import('./features/auth/pages/RegisterPage'));
+const VerifyEmailPage = lazy(() => import('./features/auth/pages/VerifyEmailPage'));
+const ForgotPasswordPage = lazy(() => import('./features/auth/pages/ForgotPasswordPage'));
+const ResetPasswordPage = lazy(() => import('./features/auth/pages/ResetPasswordPage'));
 
 const StudentDashboard = lazy(() => import('./features/exam/pages/StudentDashboard'));
 const ExamLobby = lazy(() => import('./features/exam/pages/ExamLobby'));
@@ -52,6 +55,9 @@ function App() {
           />
 
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
 
           {/* Student Routes */}
           <Route

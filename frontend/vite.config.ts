@@ -12,9 +12,18 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // All /api/* requests forwarded to FastAPI — no CORS because same-origin from browser's perspective
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        secure: false,
+      },
+      // WebSocket proxy for proctoring / realtime features
+      '/ws': {
+        target: 'ws://localhost:8000',
+        ws: true,
+        changeOrigin: true,
+        secure: false,
       },
     },
   },
