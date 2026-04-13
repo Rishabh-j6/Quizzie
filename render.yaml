@@ -4,7 +4,7 @@
 databases:
   - name: quizzie-db
     databaseName: quizzie_db
-    user: postgres
+    user: quizzie_user
     plan: free          # free tier: 1 GB storage, shared CPU
 
 services:
