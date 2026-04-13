@@ -20,12 +20,14 @@ RUN apk add --no-cache gettext
 # Copy built assets
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copy nginx config template
-COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+# Copy nginx config template (processed by custom entrypoint)
+COPY nginx.conf.template /etc/nginx/nginx.conf.template
 
-# nginx docker image automatically runs envsubst on files in /etc/nginx/templates/
-# and writes them to /etc/nginx/conf.d/ — no custom entrypoint needed.
+# Use a custom entrypoint to run envsubst on ONLY $BACKEND_URL,
+# leaving nginx's own $host, $remote_addr etc. untouched.
+COPY docker-entrypoint.sh /docker-entrypoint-custom.sh
+RUN chmod +x /docker-entrypoint-custom.sh
 
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/docker-entrypoint-custom.sh"]
